@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Morse Code Player</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            flex-direction: column;
+            padding: 2rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            text-align: center;
+            background-color: #161b22;
+            border-radius: 1.5rem;
+            padding: 2.5rem;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #58a6ff;
+            margin-bottom: 1rem;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+        }
+
+        .file-input-label {
+            background: linear-gradient(90deg, #58a6ff, #87d2ff);
+            color: #0d1117;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+        }
+
+        .file-input-wrapper:hover .file-input-label {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        #fileInput {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .action-button {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s, background-color 0.2s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            cursor: pointer;
+        }
+
+        #playButton, #pauseButton {
+            background-color: #238636;
+            color: #c9d1d9;
+        }
+
+        #playButton:hover:not(:disabled), #pauseButton:hover:not(:disabled) {
+            background-color: #2ea043;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        #stopButton {
+            background-color: #da3633;
+            color: #c9d1d9;
+            display: none;
+        }
+
+        #stopButton:hover:not(:disabled) {
+            background-color: #f85149;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.3);
+        }
+        
+        #saveWavButton {
+            background-color: #3b82f6;
+            color: #c9d1d9;
+        }
+        
+        #saveWavButton:hover:not(:disabled) {
+            background-color: #60a5fa;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        select {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            background-color: #30363d;
+            border: 1px solid #444c56;
+            color: #c9d1d9;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .banner-container {
+            width: 100%;
+            height: 100px;
+            background-color: #000;
+            border: 2px solid #58a6ff;
+            border-radius: 1rem;
+            overflow: hidden;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            position: relative;
+            margin-bottom: 2rem;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+        }
+
+        .banner-text {
+            display: flex;
+            white-space: nowrap;
+            font-family: 'Arial', sans-serif;
+            font-size: 3rem;
+            font-weight: bold;
+            color: #fff;
+            padding: 0 1rem;
+            transition: transform 0.2s linear;
+        }
+
+        .status-message {
+            margin-top: 1rem;
+            font-size: 1rem;
+            min-height: 20px;
+            color: #8b949e;
+        }
+
+        .disabled-button {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .action-button:not(:disabled) {
+            animation: pulse 1s infinite alternate;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Morse Code Player</h1>
+        <p class="mb-6 text-gray-400">Upload a text file, select a speed, and listen to the morse code playback.</p>
+
+        <div class="controls">
+            <div class="file-input-wrapper">
+                <input type="file" id="fileInput" accept=".txt">
+                <span class="file-input-label">Choose File</span>
+            </div>
+
+            <select id="wpmSelect" class="focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="15">15 WPM</option>
+                <option value="20" selected>20 WPM</option>
+                <option value="25">25 WPM</option>
+                <option value="30">30 WPM</option>
+            </select>
+
+            <button id="playButton" class="action-button disabled-button" disabled>Start Playback</button>
+            <button id="pauseButton" class="action-button" style="display: none;">Pause Playback</button>
+            <button id="stopButton" class="action-button">Stop Playback</button>
+            <button id="saveWavButton" class="action-button disabled-button" disabled>Save as WAV</button>
+        </div>
+
+        <div class="banner-container">
+            <div id="bannerText" class="banner-text"></div>
+        </div>
+
+        <p id="statusMessage" class="status-message"></p>
+    </div>
+
+    <script>
+        // Use a self-invoking function to avoid global scope pollution
+        (function() {
+            // --- CONSTANTS AND CONFIGURATION ---
+            const MORSE_CODE = {
+                'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.', 'G': '--.', 'H': '....',
+                'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..', 'M': '--', 'N': '-.', 'O': '---', 'P': '.--.',
+                'Q': '--.-', 'R': '.-.', 'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
+                'Y': '-.--', 'Z': '--..',
+                '0': '-----', '1': '.----', '2': '..---', '3': '...--', '4': '....-', '5': '.....',
+                '6': '-....', '7': '--...', '8': '---..', '9': '----.',
+                '.': '.-.-.-', ',': '--.--', '?': '..--..', "'": '.----.', '!': '-.-.--',
+                '-': '-....-', '/': '-..-.', '(': '-.--.', ')': '-.--.-', '&': '.-...',
+                ':': '---...', ';': '-.-.-.', '=': '-...-', '+': '.-.-.', '"': '.-..-.',
+                '$': '...-..-', '@': '.--.-.',
+                ' ': ' '
+            };
+            const TONE_FREQUENCY = 600; // Hz
+            const LETTER_DELAY_MS = 100; // Delay between the end of sound and the visual update
+
+            // --- STATE VARIABLES ---
+            let audioContext;
+            let oscillator;
+            let gainNode;
+            let isPlaying = false;
+            let currentText = '';
+            let timeoutIds = [];
+            let characters = [];
+            let characterIndex = 0;
+
+            // --- HTML ELEMENT REFERENCES ---
+            const fileInput = document.getElementById('fileInput');
+            const wpmSelect = document.getElementById('wpmSelect');
+            const playButton = document.getElementById('playButton');
+            const pauseButton = document.getElementById('pauseButton');
+            const stopButton = document.getElementById('stopButton');
+            const saveWavButton = document.getElementById('saveWavButton');
+            const statusMessage = document.getElementById('statusMessage');
+            const bannerText = document.getElementById('bannerText');
+            const fileInputLabel = document.querySelector('.file-input-label');
+
+            // --- UTILITY FUNCTIONS ---
+
+            // Calculates the length of a dot in milliseconds based on the WPM setting.
+            // Standard formula: 1200 / WPM.
+            const getDotLength = (wpm) => 1200 / wpm;
+
+            // Simple async delay function using setTimeout
+            const delay = (ms) => new Promise(resolve => timeoutIds.push(setTimeout(resolve, ms)));
+
+            // Plays a tone for a given duration
+            const playTone = (duration) => {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                // Create oscillator and gain node
+                oscillator = audioContext.createOscillator();
+                gainNode = audioContext.createGain();
+
+                // Set tone frequency and volume
+                oscillator.type = 'sine';
+                oscillator.frequency.value = TONE_FREQUENCY;
+                gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+
+                // Connect nodes
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                // Start and stop the tone
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + duration / 1000);
+            };
+
+            // Stops any currently playing tone
+            const stopTone = () => {
+                if (oscillator) {
+                    oscillator.stop();
+                    oscillator.disconnect();
+                }
+            };
+
+            // --- MAIN PLAYBACK LOGIC ---
+
+            // Function to play a single Morse code element (dot, dash, or space)
+            const playMorseElement = async (element, wpm) => {
+                const dotLength = getDotLength(wpm);
+                const dashLength = dotLength * 3;
+                const interElementDelay = dotLength;
+
+                if (element === '.') {
+                    playTone(dotLength);
+                    await delay(dotLength + interElementDelay);
+                } else if (element === '-') {
+                    playTone(dashLength);
+                    await delay(dashLength + interElementDelay);
+                } else if (element === ' ') {
+                    // Space between words (7 dots length)
+                    await delay(dotLength * 4 - interElementDelay);
+                }
+            };
+
+            // Function to play a single letter and update the banner
+            const playCharacter = async (char, wpm) => {
+                const morse = MORSE_CODE[char.toUpperCase()] || '';
+                const dotLength = getDotLength(wpm);
+                const interLetterDelay = dotLength * 3; // Standard delay between letters is 3 dots
+
+                // If it's a space, handle the delay and visual separately
+                if (char === ' ') {
+                    bannerText.innerHTML += `<span>&nbsp;</span>`; // Add a non-breaking space for visual spacing
+                    await delay(dotLength * 7); // Delay for word space (7 dots)
+                    return;
+                }
+
+                // Play the sound for each morse element (dot/dash)
+                for (let i = 0; i < morse.length; i++) {
+                    if (!isPlaying) return;
+                    await playMorseElement(morse[i], wpm);
+                }
+
+                // Delay before showing the character on the banner
+                await delay(LETTER_DELAY_MS);
+                if (!isPlaying) return;
+
+                // Update the banner with a new letter
+                const newSpan = document.createElement('span');
+                newSpan.textContent = char.toUpperCase();
+                newSpan.style.transition = 'transform 0.2s ease-out';
+                bannerText.appendChild(newSpan);
+
+                // Delay for inter-letter space
+                await delay(interLetterDelay);
+            };
+
+            // Main playback loop
+            const playbackLoop = async () => {
+                while (isPlaying && characterIndex < characters.length) {
+                    // Read the WPM value inside the loop to allow for real-time changes
+                    const wpm = parseInt(wpmSelect.value, 10);
+                    const char = characters[characterIndex];
+                    await playCharacter(char, wpm);
+                    characterIndex++;
+                }
+
+                if (isPlaying) {
+                    statusMessage.textContent = 'Playback finished!';
+                    resetPlayback();
+                }
+            };
+
+            // --- WAV FILE EXPORT LOGIC ---
+            const writeString = (view, offset, string) => {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            };
+
+            const floatTo16BitPCM = (output, offset, input) => {
+                for (let i = 0; i < input.length; i++, offset += 2) {
+                    let s = Math.max(-1, Math.min(1, input[i]));
+                    output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+                }
+            };
+
+            const encodeWAV = (samples, sampleRate) => {
+                const buffer = new ArrayBuffer(44 + samples.length * 2);
+                const view = new DataView(buffer);
+                
+                // RIFF identifier
+                writeString(view, 0, 'RIFF');
+                // file length
+                view.setUint32(4, 36 + samples.length * 2, true);
+                // RIFF type
+                writeString(view, 8, 'WAVE');
+                // format chunk identifier
+                writeString(view, 12, 'fmt ');
+                // format chunk length
+                view.setUint32(16, 16, true);
+                // sample format (raw)
+                view.setUint16(20, 1, true);
+                // channel count
+                view.setUint16(22, 1, true);
+                // sample rate
+                view.setUint32(24, sampleRate, true);
+                // byte rate (sample rate * block align)
+                view.setUint32(28, sampleRate * 2, true);
+                // block align (channel count * bytes per sample)
+                view.setUint16(32, 2, true);
+                // bits per sample
+                view.setUint16(34, 16, true);
+                // data chunk identifier
+                writeString(view, 36, 'data');
+                // data chunk length
+                view.setUint32(40, samples.length * 2, true);
+                
+                floatTo16BitPCM(view, 44, samples);
+                
+                return view;
+            };
+
+            const saveAsWav = async () => {
+                if (!currentText) {
+                    statusMessage.textContent = "Please select a text file first.";
+                    return;
+                }
+
+                statusMessage.textContent = "Generating WAV file...";
+                playButton.disabled = true;
+                playButton.classList.add('disabled-button');
+                saveWavButton.disabled = true;
+                saveWavButton.classList.add('disabled-button');
+                
+                const wpm = parseInt(wpmSelect.value, 10);
+                const dotLength = getDotLength(wpm);
+                const sampleRate = 44100;
+                
+                let audioBuffer = [];
+                const charactersToEncode = currentText.toUpperCase().split('');
+                
+                for (const char of charactersToEncode) {
+                    const morse = MORSE_CODE[char] || '';
+                    if (char === ' ') {
+                        // Add silence for word space
+                        const spaceDuration = (dotLength * 7) / 1000;
+                        for (let i = 0; i < spaceDuration * sampleRate; i++) {
+                            audioBuffer.push(0);
+                        }
+                    } else {
+                        for (let i = 0; i < morse.length; i++) {
+                            const element = morse[i];
+                            const elementDuration = (element === '.') ? dotLength : dotLength * 3;
+                            
+                            // Generate sine wave samples
+                            const numSamples = Math.floor((elementDuration / 1000) * sampleRate);
+                            for (let j = 0; j < numSamples; j++) {
+                                const t = j / sampleRate;
+                                audioBuffer.push(Math.sin(2 * Math.PI * TONE_FREQUENCY * t) * 0.5);
+                            }
+                            
+                            // Add inter-element silence
+                            const interElementDuration = dotLength / 1000;
+                            const numSilenceSamples = Math.floor(interElementDuration * sampleRate);
+                            for (let j = 0; j < numSilenceSamples; j++) {
+                                audioBuffer.push(0);
+                            }
+                        }
+                        
+                        // Add inter-letter silence (3 dots)
+                        const interLetterDuration = (dotLength * 3) / 1000;
+                        const numSilenceSamples = Math.floor(interLetterDuration * sampleRate);
+                        for (let j = 0; j < numSilenceSamples; j++) {
+                            audioBuffer.push(0);
+                        }
+                    }
+                }
+                
+                const dataview = encodeWAV(audioBuffer, sampleRate);
+                const audioBlob = new Blob([dataview], { type: 'audio/wav' });
+                const url = URL.createObjectURL(audioBlob);
+                
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'morse_code_playback.wav';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                statusMessage.textContent = 'WAV file saved successfully!';
+                
+                // Re-enable buttons
+                playButton.disabled = false;
+                playButton.classList.remove('disabled-button');
+                saveWavButton.disabled = false;
+                saveWavButton.classList.remove('disabled-button');
+            };
+
+            // --- UI CONTROL FUNCTIONS ---
+            const startPlayback = () => {
+                if (!currentText) {
+                    statusMessage.textContent = "Please select a text file first.";
+                    return;
+                }
+                
+                // If this is a fresh start
+                if (characterIndex === 0) {
+                    characters = currentText.toUpperCase().split('');
+                    bannerText.innerHTML = '';
+                    saveWavButton.disabled = true;
+                    saveWavButton.classList.add('disabled-button');
+                }
+
+                isPlaying = true;
+                playButton.style.display = 'none';
+                pauseButton.style.display = 'inline-block';
+                stopButton.style.display = 'inline-block';
+                statusMessage.textContent = 'Playing...';
+                
+                playbackLoop();
+            };
+
+            const pausePlayback = () => {
+                isPlaying = false;
+                stopTone();
+                clearAllTimeouts();
+                
+                playButton.textContent = 'Resume Playback';
+                playButton.style.display = 'inline-block';
+                pauseButton.style.display = 'none';
+                statusMessage.textContent = 'Playback paused.';
+            };
+
+            const resetPlayback = () => {
+                isPlaying = false;
+                stopTone();
+                clearAllTimeouts();
+                
+                characterIndex = 0;
+                playButton.textContent = 'Start Playback';
+                playButton.style.display = 'inline-block';
+                playButton.disabled = currentText === '';
+                playButton.classList.toggle('disabled-button', currentText === '');
+                pauseButton.style.display = 'none';
+                stopButton.style.display = 'none';
+                saveWavButton.disabled = currentText === '';
+                saveWavButton.classList.toggle('disabled-button', currentText === '');
+            };
+
+            const clearAllTimeouts = () => {
+                timeoutIds.forEach(id => clearTimeout(id));
+                timeoutIds = [];
+            };
+
+            // --- EVENT LISTENERS ---
+            fileInput.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (!file) {
+                    currentText = '';
+                    resetPlayback();
+                    fileInputLabel.textContent = 'Choose File';
+                    statusMessage.textContent = 'No file selected.';
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    currentText = e.target.result;
+                    resetPlayback();
+                    fileInputLabel.textContent = file.name;
+                    statusMessage.textContent = `${file.name} loaded. Ready to play.`;
+                };
+                reader.onerror = () => {
+                    statusMessage.textContent = `Error reading file: ${reader.error}`;
+                    currentText = '';
+                    resetPlayback();
+                    fileInputLabel.textContent = 'Choose File';
+                };
+                reader.readAsText(file);
+            });
+
+            playButton.addEventListener('click', startPlayback);
+            pauseButton.addEventListener('click', pausePlayback);
+            stopButton.addEventListener('click', resetPlayback);
+            saveWavButton.addEventListener('click', saveAsWav);
+            
+            // Initial state check
+            if (!currentText) {
+                statusMessage.textContent = 'Please select a file to begin.';
+            }
+        })();
+    </script>
+</body>
+</html>
