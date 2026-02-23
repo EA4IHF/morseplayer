@@ -213,7 +213,6 @@
     </div>
 
     <script>
-        // Use a self-invoking function to avoid global scope pollution
         (function() {
             // --- CONSTANTS AND CONFIGURATION ---
             const MORSE_CODE = {
@@ -230,12 +229,17 @@
                 ' ': ' '
             };
             const TONE_FREQUENCY = 600; // Hz
-            const LETTER_DELAY_MS = 100; // Delay between the end of sound and the visual update
+            const GAIN_LEVEL = 0.5;
+            // Attack/release time in seconds — short enough to be inaudible as a
+            // distinct envelope, but long enough to prevent the waveform discontinuity
+            // (click/pop) that occurs when the gain jumps abruptly from 0 to non-zero.
+            // This is the key technique used by morsebrowser / morse-pro.
+            const RAMP_TIME = 0.005; // 5 ms
 
             // --- STATE VARIABLES ---
-            let audioContext;
-            let oscillator;
-            let gainNode;
+            let audioContext = null;
+            let oscillator = null;
+            let gainNode = null;
             let isPlaying = false;
             let currentText = '';
             let timeoutIds = [];
@@ -254,249 +258,159 @@
             const fileInputLabel = document.querySelector('.file-input-label');
 
             // --- UTILITY FUNCTIONS ---
+            const getDotLength = (wpm) => 1200 / wpm; // ms
 
-            // Calculates the length of a dot in milliseconds based on the WPM setting.
-            // Standard formula: 1200 / WPM.
-            const getDotLength = (wpm) => 1200 / wpm;
+            // --- AUDIO ENGINE ---
+            // Initialise the AudioContext and a single persistent oscillator.
+            // The oscillator runs silently (gain = 0) at all times.
+            // Tones are produced by ramping the gain up and back down, which avoids
+            // the waveform discontinuities that cause clicks/pops at high speeds.
+            const initAudio = () => {
+                if (audioContext) return;
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Simple async delay function using setTimeout
-            const delay = (ms) => new Promise(resolve => timeoutIds.push(setTimeout(resolve, ms)));
-
-            // Plays a tone for a given duration
-            const playTone = (duration) => {
-                if (!audioContext) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-
-                // Create oscillator and gain node
                 oscillator = audioContext.createOscillator();
                 gainNode = audioContext.createGain();
 
-                // Set tone frequency and volume
                 oscillator.type = 'sine';
                 oscillator.frequency.value = TONE_FREQUENCY;
-                gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+                gainNode.gain.setValueAtTime(0, audioContext.currentTime);
 
-                // Connect nodes
                 oscillator.connect(gainNode);
                 gainNode.connect(audioContext.destination);
-
-                // Start and stop the tone
                 oscillator.start();
-                oscillator.stop(audioContext.currentTime + duration / 1000);
             };
 
-            // Stops any currently playing tone
-            const stopTone = () => {
+            // Tear down the audio graph so it can be fully re-created on next play.
+            const teardownAudio = () => {
                 if (oscillator) {
-                    oscillator.stop();
+                    try {
+                        gainNode.gain.cancelScheduledValues(0);
+                        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+                        oscillator.stop();
+                    } catch(e) {}
                     oscillator.disconnect();
+                    gainNode.disconnect();
+                    oscillator = null;
+                    gainNode = null;
                 }
+                if (audioContext) {
+                    audioContext.close();
+                    audioContext = null;
+                }
+            };
+
+            /**
+             * Schedule a tone ON/OFF via gain automation on the Web Audio timeline.
+             *
+             * This is the morsebrowser technique: instead of starting/stopping an
+             * oscillator node (which creates audible clicks), we keep one oscillator
+             * running and control its envelope with sub-millisecond ramps.
+             *
+             * @param {number} startTime  - audioContext time (seconds) when tone begins
+             * @param {number} duration   - tone duration in seconds
+             */
+            const scheduleTone = (startTime, duration) => {
+                const g = gainNode.gain;
+                // Ramp up at tone start
+                g.setValueAtTime(0, startTime);
+                g.linearRampToValueAtTime(GAIN_LEVEL, startTime + RAMP_TIME);
+                // Ramp down at tone end
+                g.setValueAtTime(GAIN_LEVEL, startTime + duration - RAMP_TIME);
+                g.linearRampToValueAtTime(0, startTime + duration);
+            };
+
+            /**
+             * Build the complete audio schedule for all characters and return an
+             * array of {char, displayAt} objects so the UI loop can use setTimeout
+             * to update the banner in sync with audio playback.
+             *
+             * Pre-scheduling everything at once (rather than chaining setTimeouts)
+             * is robust against main-thread jank at high speeds.
+             */
+            const buildSchedule = (chars, wpm) => {
+                const dot  = getDotLength(wpm) / 1000; // seconds
+                const dash = dot * 3;
+                const interElement = dot;       // gap between dots/dashes within a letter
+                const interLetter  = dot * 3;  // gap between letters (after last element gap)
+                const wordSpace    = dot * 7;  // gap for word space character
+
+                let t = audioContext.currentTime + 0.1; // small lead-in
+                const uiEvents = [];
+
+                for (let i = 0; i < chars.length; i++) {
+                    const char = chars[i].toUpperCase();
+                    if (char === ' ') {
+                        uiEvents.push({ char: ' ', displayAt: t * 1000 });
+                        t += wordSpace;
+                    } else {
+                        const morse = MORSE_CODE[char] || '';
+                        if (!morse) continue;
+
+                        for (let j = 0; j < morse.length; j++) {
+                            const elemDuration = (morse[j] === '.') ? dot : dash;
+                            scheduleTone(t, elemDuration);
+                            t += elemDuration + interElement;
+                        }
+                        // The last inter-element gap already accounts for 1 dot;
+                        // inter-letter space is 3 dots total, so add 2 more dots.
+                        t += interLetter - interElement;
+
+                        // Show the character on the banner after its last element ends
+                        uiEvents.push({ char, displayAt: t * 1000 });
+                    }
+                }
+
+                return { totalDuration: t, uiEvents };
             };
 
             // --- MAIN PLAYBACK LOGIC ---
 
-            // Function to play a single Morse code element (dot, dash, or space)
-            const playMorseElement = async (element, wpm) => {
-                const dotLength = getDotLength(wpm);
-                const dashLength = dotLength * 3;
-                const interElementDelay = dotLength;
-
-                if (element === '.') {
-                    playTone(dotLength);
-                    await delay(dotLength + interElementDelay);
-                } else if (element === '-') {
-                    playTone(dashLength);
-                    await delay(dashLength + interElementDelay);
-                } else if (element === ' ') {
-                    // Space between words (7 dots length)
-                    await delay(dotLength * 3 - interElementDelay);
-                }
-            };
-
-            // Function to play a single letter and update the banner
-            const playCharacter = async (char, wpm) => {
-                const morse = MORSE_CODE[char.toUpperCase()] || '';
-                const dotLength = getDotLength(wpm);
-                const interLetterDelay = dotLength * 3; // Standard delay between letters is 3 dots
-
-                // If it's a space, handle the delay and visual separately
-                if (char === ' ') {
-                    bannerText.innerHTML += `<span>&nbsp;</span>`; // Add a non-breaking space for visual spacing
-                    await delay(dotLength * 7); // Delay for word space (7 dots)
-                    return;
-                }
-
-                // Play the sound for each morse element (dot/dash)
-                for (let i = 0; i < morse.length; i++) {
-                    if (!isPlaying) return;
-                    await playMorseElement(morse[i], wpm);
-                }
-
-                // Delay before showing the character on the banner
-                await delay(LETTER_DELAY_MS);
-                if (!isPlaying) return;
-
-                // Update the banner with a new letter
-                const newSpan = document.createElement('span');
-                newSpan.textContent = char.toUpperCase();
-                newSpan.style.transition = 'transform 0.2s ease-out';
-                bannerText.appendChild(newSpan);
-
-                // Delay for inter-letter space
-                await delay(interLetterDelay);
-            };
-
-            // Main playback loop
-            const playbackLoop = async () => {
-                while (isPlaying && characterIndex < characters.length) {
-                    // Read the WPM value inside the loop to allow for real-time changes
-                    const wpm = parseInt(wpmSelect.value, 10);
-                    const char = characters[characterIndex];
-                    await playCharacter(char, wpm);
-                    characterIndex++;
-                }
-
-                if (isPlaying) {
-                    statusMessage.textContent = 'Playback finished!';
-                    resetPlayback();
-                }
-            };
-
-            // --- WAV FILE EXPORT LOGIC ---
-            const writeString = (view, offset, string) => {
-                for (let i = 0; i < string.length; i++) {
-                    view.setUint8(offset + i, string.charCodeAt(i));
-                }
-            };
-
-            const floatTo16BitPCM = (output, offset, input) => {
-                for (let i = 0; i < input.length; i++, offset += 2) {
-                    let s = Math.max(-1, Math.min(1, input[i]));
-                    output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-                }
-            };
-
-            const encodeWAV = (samples, sampleRate) => {
-                const buffer = new ArrayBuffer(44 + samples.length * 2);
-                const view = new DataView(buffer);
-                
-                // RIFF identifier
-                writeString(view, 0, 'RIFF');
-                // file length
-                view.setUint32(4, 36 + samples.length * 2, true);
-                // RIFF type
-                writeString(view, 8, 'WAVE');
-                // format chunk identifier
-                writeString(view, 12, 'fmt ');
-                // format chunk length
-                view.setUint32(16, 16, true);
-                // sample format (raw)
-                view.setUint16(20, 1, true);
-                // channel count
-                view.setUint16(22, 1, true);
-                // sample rate
-                view.setUint32(24, sampleRate, true);
-                // byte rate (sample rate * block align)
-                view.setUint32(28, sampleRate * 2, true);
-                // block align (channel count * bytes per sample)
-                view.setUint16(32, 2, true);
-                // bits per sample
-                view.setUint16(34, 16, true);
-                // data chunk identifier
-                writeString(view, 36, 'data');
-                // data chunk length
-                view.setUint32(40, samples.length * 2, true);
-                
-                floatTo16BitPCM(view, 44, samples);
-                
-                return view;
-            };
-
-            const saveAsWav = async () => {
-                if (!currentText) {
-                    statusMessage.textContent = "Please select a text file first.";
-                    return;
-                }
-
-                statusMessage.textContent = "Generating WAV file...";
-                playButton.disabled = true;
-                playButton.classList.add('disabled-button');
-                saveWavButton.disabled = true;
-                saveWavButton.classList.add('disabled-button');
-                
+            // Kick off playback: build the full audio schedule and set UI timers.
+            const runScheduledPlayback = () => {
                 const wpm = parseInt(wpmSelect.value, 10);
-                const dotLength = getDotLength(wpm);
-                const sampleRate = 44100;
-                
-                let audioBuffer = [];
-                const charactersToEncode = currentText.toUpperCase().split('');
-                
-                for (const char of charactersToEncode) {
-                    const morse = MORSE_CODE[char] || '';
-                    if (char === ' ') {
-                        // Add silence for word space
-                        const spaceDuration = (dotLength * 7) / 1000;
-                        for (let i = 0; i < spaceDuration * sampleRate; i++) {
-                            audioBuffer.push(0);
+                const charsToPlay = characters.slice(characterIndex);
+                const { totalDuration, uiEvents } = buildSchedule(charsToPlay, wpm);
+
+                const now = performance.now();
+
+                uiEvents.forEach(({ char, displayAt }) => {
+                    const msFromNow = displayAt - audioContext.currentTime * 1000 + audioContext.currentTime * 1000;
+                    // Convert audioContext time offset to wall-clock ms from now
+                    const wallMs = (displayAt / 1000 - audioContext.currentTime) * 1000;
+                    const id = setTimeout(() => {
+                        if (!isPlaying) return;
+                        if (char === ' ') {
+                            bannerText.innerHTML += `<span>&nbsp;</span>`;
+                        } else {
+                            const span = document.createElement('span');
+                            span.textContent = char;
+                            bannerText.appendChild(span);
                         }
-                    } else {
-                        for (let i = 0; i < morse.length; i++) {
-                            const element = morse[i];
-                            const elementDuration = (element === '.') ? dotLength : dotLength * 3;
-                            
-                            // Generate sine wave samples
-                            const numSamples = Math.floor((elementDuration / 1000) * sampleRate);
-                            for (let j = 0; j < numSamples; j++) {
-                                const t = j / sampleRate;
-                                audioBuffer.push(Math.sin(2 * Math.PI * TONE_FREQUENCY * t) * 0.5);
-                            }
-                            
-                            // Add inter-element silence
-                            const interElementDuration = dotLength / 1000;
-                            const numSilenceSamples = Math.floor(interElementDuration * sampleRate);
-                            for (let j = 0; j < numSilenceSamples; j++) {
-                                audioBuffer.push(0);
-                            }
-                        }
-                        
-                        // Add inter-letter silence (3 dots)
-                        const interLetterDuration = (dotLength * 3) / 1000;
-                        const numSilenceSamples = Math.floor(interLetterDuration * sampleRate);
-                        for (let j = 0; j < numSilenceSamples; j++) {
-                            audioBuffer.push(0);
-                        }
+                        characterIndex++;
+                    }, Math.max(0, wallMs));
+                    timeoutIds.push(id);
+                });
+
+                // End-of-playback timer
+                const totalWallMs = (totalDuration - audioContext.currentTime) * 1000;
+                const endId = setTimeout(() => {
+                    if (isPlaying) {
+                        statusMessage.textContent = 'Playback finished!';
+                        resetPlayback();
                     }
-                }
-                
-                const dataview = encodeWAV(audioBuffer, sampleRate);
-                const audioBlob = new Blob([dataview], { type: 'audio/wav' });
-                const url = URL.createObjectURL(audioBlob);
-                
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = 'morse_code_playback.wav';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                
-                statusMessage.textContent = 'WAV file saved successfully!';
-                
-                // Re-enable buttons
-                playButton.disabled = false;
-                playButton.classList.remove('disabled-button');
-                saveWavButton.disabled = false;
-                saveWavButton.classList.remove('disabled-button');
+                }, Math.max(0, totalWallMs));
+                timeoutIds.push(endId);
             };
 
-            // --- UI CONTROL FUNCTIONS ---
             const startPlayback = () => {
                 if (!currentText) {
                     statusMessage.textContent = "Please select a text file first.";
                     return;
                 }
-                
-                // If this is a fresh start
+
+                initAudio();
+
                 if (characterIndex === 0) {
                     characters = currentText.toUpperCase().split('');
                     bannerText.innerHTML = '';
@@ -509,15 +423,20 @@
                 pauseButton.style.display = 'inline-block';
                 stopButton.style.display = 'inline-block';
                 statusMessage.textContent = 'Playing...';
-                
-                playbackLoop();
+
+                runScheduledPlayback();
             };
 
             const pausePlayback = () => {
                 isPlaying = false;
-                stopTone();
                 clearAllTimeouts();
-                
+                // Silence immediately with a short ramp to avoid a pop on pause
+                if (gainNode) {
+                    gainNode.gain.cancelScheduledValues(audioContext.currentTime);
+                    gainNode.gain.setValueAtTime(gainNode.gain.value, audioContext.currentTime);
+                    gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + RAMP_TIME);
+                }
+
                 playButton.textContent = 'Resume Playback';
                 playButton.style.display = 'inline-block';
                 pauseButton.style.display = 'none';
@@ -526,9 +445,9 @@
 
             const resetPlayback = () => {
                 isPlaying = false;
-                stopTone();
                 clearAllTimeouts();
-                
+                teardownAudio();
+
                 characterIndex = 0;
                 playButton.textContent = 'Start Playback';
                 playButton.style.display = 'inline-block';
@@ -545,6 +464,128 @@
                 timeoutIds = [];
             };
 
+            // --- WAV FILE EXPORT LOGIC ---
+            // WAV export uses offline sample generation with proper attack/release
+            // envelopes applied at the sample level to match playback quality.
+            const writeString = (view, offset, string) => {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            };
+
+            const floatTo16BitPCM = (output, offset, input) => {
+                for (let i = 0; i < input.length; i++, offset += 2) {
+                    let s = Math.max(-1, Math.min(1, input[i]));
+                    output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+                }
+            };
+
+            const encodeWAV = (samples, sampleRate) => {
+                const buffer = new ArrayBuffer(44 + samples.length * 2);
+                const view = new DataView(buffer);
+                writeString(view, 0, 'RIFF');
+                view.setUint32(4, 36 + samples.length * 2, true);
+                writeString(view, 8, 'WAVE');
+                writeString(view, 12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true);
+                view.setUint16(22, 1, true);
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, sampleRate * 2, true);
+                view.setUint16(32, 2, true);
+                view.setUint16(34, 16, true);
+                writeString(view, 36, 'data');
+                view.setUint32(40, samples.length * 2, true);
+                floatTo16BitPCM(view, 44, samples);
+                return view;
+            };
+
+            /**
+             * Generate one tone burst at sample level with linear attack/release ramps.
+             * The phase is threaded through to keep the waveform continuous across calls.
+             */
+            const generateToneSamples = (durationSec, sampleRate, phaseIn) => {
+                const numSamples = Math.floor(durationSec * sampleRate);
+                const rampSamples = Math.floor(RAMP_TIME * sampleRate);
+                const samples = new Float32Array(numSamples);
+                let phase = phaseIn;
+                const phaseInc = (2 * Math.PI * TONE_FREQUENCY) / sampleRate;
+                for (let i = 0; i < numSamples; i++) {
+                    let env = GAIN_LEVEL;
+                    if (i < rampSamples) env = GAIN_LEVEL * (i / rampSamples);
+                    else if (i >= numSamples - rampSamples) env = GAIN_LEVEL * ((numSamples - i) / rampSamples);
+                    samples[i] = Math.sin(phase) * env;
+                    phase += phaseInc;
+                    if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
+                }
+                return { samples, phase };
+            };
+
+            const saveAsWav = async () => {
+                if (!currentText) {
+                    statusMessage.textContent = "Please select a text file first.";
+                    return;
+                }
+
+                statusMessage.textContent = "Generating WAV file...";
+                playButton.disabled = true;
+                playButton.classList.add('disabled-button');
+                saveWavButton.disabled = true;
+                saveWavButton.classList.add('disabled-button');
+
+                const wpm = parseInt(wpmSelect.value, 10);
+                const dot  = getDotLength(wpm) / 1000;
+                const dash = dot * 3;
+                const interElement = dot;
+                const interLetter  = dot * 3;
+                const wordSpace    = dot * 7;
+                const sampleRate   = 44100;
+
+                let audioBuffer = [];
+                let phase = 0;
+                const silence = (durationSec) => {
+                    const n = Math.floor(durationSec * sampleRate);
+                    for (let i = 0; i < n; i++) audioBuffer.push(0);
+                };
+
+                for (const char of currentText.toUpperCase()) {
+                    if (char === ' ') {
+                        silence(wordSpace);
+                        continue;
+                    }
+                    const morse = MORSE_CODE[char] || '';
+                    if (!morse) continue;
+
+                    for (let j = 0; j < morse.length; j++) {
+                        const dur = (morse[j] === '.') ? dot : dash;
+                        const { samples, phase: newPhase } = generateToneSamples(dur, sampleRate, phase);
+                        phase = newPhase;
+                        for (const s of samples) audioBuffer.push(s);
+                        silence(interElement);
+                    }
+                    // Replace last inter-element gap with inter-letter gap
+                    // (we already pushed interElement worth of silence, add the remainder)
+                    silence(interLetter - interElement);
+                }
+
+                const dataview = encodeWAV(audioBuffer, sampleRate);
+                const audioBlob = new Blob([dataview], { type: 'audio/wav' });
+                const url = URL.createObjectURL(audioBlob);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'morse_code_playback.wav';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                statusMessage.textContent = 'WAV file saved successfully!';
+                playButton.disabled = false;
+                playButton.classList.remove('disabled-button');
+                saveWavButton.disabled = false;
+                saveWavButton.classList.remove('disabled-button');
+            };
+
             // --- EVENT LISTENERS ---
             fileInput.addEventListener('change', (event) => {
                 const file = event.target.files[0];
@@ -555,7 +596,6 @@
                     statusMessage.textContent = 'No file selected.';
                     return;
                 }
-
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     currentText = e.target.result;
@@ -576,8 +616,7 @@
             pauseButton.addEventListener('click', pausePlayback);
             stopButton.addEventListener('click', resetPlayback);
             saveWavButton.addEventListener('click', saveAsWav);
-            
-            // Initial state check
+
             if (!currentText) {
                 statusMessage.textContent = 'Please select a file to begin.';
             }
