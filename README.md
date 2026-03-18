@@ -1,4 +1,3 @@
-<img width="1399" height="919" alt="image" src="https://github.com/user-attachments/assets/780ec358-dd51-4999-957b-84e9db5c4979" />73
 This tiny project will help you learn morse code.
 https://ea4ihf.github.io/morseplayer/
 
