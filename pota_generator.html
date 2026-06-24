@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POTA CW QSO Generator</title>
+<style>
+    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background-color: #f4f4f9; color: #333; }
+    .container { background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 5px; font-weight: bold; }
+    input, select { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
+    button { width: 100%; background-color: #0056b3; color: white; border: none; padding: 15px; cursor: pointer; font-size: 16px; border-radius: 4px; font-weight: bold; }
+    button:hover { background-color: #004494; }
+    #status { margin-top: 20px; font-weight: bold; color: green; text-align: center; min-height: 20px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h2>POTA CW QSO Generator</h2>
+    <div class="form-group">
+        <label for="numQsos">Number of QSOs:</label>
+        <input type="number" id="numQsos" value="100" min="1">
+    </div>
+    <div class="form-group">
+        <label for="continent">Continent:</label>
+        <select id="continent">
+            <option value="WW">World Wide</option>
+            <option value="NA">North America</option>
+            <option value="SA">South America</option>
+            <option value="EU">Europe</option>
+            <option value="AS">Asia</option>
+            <option value="AF">Africa</option>
+            <option value="OC">Oceania</option>
+        </select>
+    </div>
+    <button id="generateBtn">Generate & Download TXT</button>
+    <div id="status"></div>
+</div>
+
+<script>
+    const dataset = {
+        "NA": [["K4SWL", "WDC"], ["VE3AA", "OTT"], ["W1AW", "WDC"], ["N6RO", "WDC"], ["XE1KK", "MEX"], ["KP4JRS", "SJU"]],
+        "SA": [["PY2EX", "BSB"], ["LU8DQ", "BUE"], ["CE3CT", "SCL"], ["HK3C", "BOG"], ["YV5EN", "CCS"], ["CX2DK", "MVD"]],
+        "EU": [["EA4IHF", "MAD"], ["G4FAL", "LON"], ["DL1A", "BER"], ["F8DZY", "PAR"], ["I4KMW", "ROM"], ["SP4Z", "WAW"], ["LA8W", "OSL"], ["OH2BH", "HEL"], ["SM5EDX", "STO"], ["UR0MC", "KYI"], ["9A1A", "ZAG"], ["OZ1LO", "CPH"]],
+        "AS": [["JA1NUT", "TKO"], ["VU2PTT", "DEL"], ["4X4DK", "JRS"], ["BY1RX", "BEJ"], ["HL1A", "SEO"], ["HS0ZAR", "BKK"]],
+        "AF": [["ZS6EZ", "PTA"], ["EA8RM", "LPA"], ["SU1SK", "CAI"], ["CN8KD", "RAB"], ["V51YJ", "WDH"], ["5Z4J", "NBO"]],
+        "OC": [["VK2ZZZ", "CBR"], ["ZL2IFB", "WLG"], ["YB0AR", "JKT"], ["KH6J", "HNL"], ["DU1EV", "MNL"], ["V85A", "BWN"]]
+    };
+
+    const greetings = ['GM', 'GA', 'GE'];
+    const rsts = ['5NN', '599', '589', '579', '569', '559', '449'];
+
+    function getRandomItem(arr) {
+        return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    document.getElementById('generateBtn').addEventListener('click', () => {
+        const numQsos = parseInt(document.getElementById('numQsos').value) || 100;
+        const continent = document.getElementById('continent').value;
+        
+        let activeData = [];
+        if (continent === 'WW') {
+            for (const key in dataset) {
+                activeData = activeData.concat(dataset[key]);
+            }
+        } else {
+            activeData = dataset[continent];
+        }
+
+        if (activeData.length < 2) {
+            alert("Not enough data to generate unique QSOs for this selection.");
+            return;
+        }
+
+        let qsos = [];
+        for (let i = 0; i < numQsos; i++) {
+            const callerPair = getRandomItem(activeData);
+            let responderPair = getRandomItem(activeData);
+            
+            while (callerPair[0] === responderPair[0]) {
+                responderPair = getRandomItem(activeData);
+            }
+
+            const caller = callerPair[0];
+            const responderCall = responderPair[0];
+            const responderCap = responderPair[1];
+            const greet = getRandomItem(greetings);
+            const rst1 = getRandomItem(rsts);
+            const rst2 = getRandomItem(rsts);
+
+            // Added trailing space before newline and at the end
+            let qso = `CQ POTA CQ POTA CQ POTA DE ${caller} ${caller} K \n`;
+            qso += `${responderCall} \n`;
+            qso += `${responderCall} ${greet} UR ${rst1} ${rst2} BK \n`;
+            qso += `BK ${greet} UR ${rst1} ${rst2} ${responderCap} BK \n`;
+            qso += `BK TU ES 73 `;
+
+            qsos.push(qso);
+        }
+
+        const textContent = qsos.join('\n\n');
+        const blob = new Blob([textContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'pota_generator_qsos.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        const status = document.getElementById('status');
+        status.textContent = `Successfully generated ${numQsos} QSOs!`;
+        setTimeout(() => { status.textContent = ''; }, 3000);
+    });
+</script>
+
+</body>
+</html>
